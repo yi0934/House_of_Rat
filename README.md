@@ -26,20 +26,24 @@ $ go mod tidy
 $ go mod download
 $ go build main.go
 $ ./main
-输入命令: help
-可用命令:
-  http            启动HTTP服务
-  websocket       启动WebSocket服务
-  list websocket  列出所有活动的WebSocket连接
-  use <UUID>     与特定的WebSocket连接交互（通过UUID）
-  help           显示此帮助信息
-# 开启websocket,等待client连接
-输入命令: websocket 
-WebSocket服务已启动在8081端口
-新连接: {ip}:{port}, UUID: {session_uuid}
-输入命令: use dbd664fb-774d-4a57-b5cb-d16202ce1636
-输入要给 {ip}:{55680} 发送的消息 (输入 'back' 或 'bk' 返回): help
-可用命令:
+Enter command: help
+Available commands:
+  http            Start HTTP server
+  websocket       Start WebSocket server
+  list websocket  List all active WebSocket connections
+  use <UUID>      Interact with a specific WebSocket connection (by UUID)
+  generate        Generate a client template with options: lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>
+  help            Show this help information
+Enter command: generate lang=python ip=127.0.0.1  port=8081 protocol=ws
+Client template generated: client_python.py
+Enter command: websocket 
+WebSocket server started on port 8081
+# execute python3 client_python.py on client
+
+New connection: 127.0.0.1:6606, UUID: 31f904ce-0e76-4659-8067-84ed644ecf0b
+Enter command: use 31f904ce-0e76-4659-8067-84ed644ecf0b
+Enter message for 31f904ce-0e76-4659-8067-84ed644ecf0b (or 'back' to return): help
+Available:
   list_files
   get_clipboard
   download_file
@@ -47,4 +51,5 @@ WebSocket服务已启动在8081端口
   execute_command
   list_processes
   help
+Enter message for 31f904ce-0e76-4659-8067-84ed644ecf0b (or 'back' to return):execute_command whoami
 
