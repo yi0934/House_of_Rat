@@ -154,7 +154,7 @@ func generateClientTemplate(language, ip, port, osType, protocol string) error {
 
 func printUseCommandHelp() {
 	color.Set(color.FgCyan)
-	fmt.Println("可用命令:")
+	fmt.Println("Available commands:")
 	for _, cmd := range availableCommands {
 		fmt.Printf("  %s\n", cmd)
 	}
