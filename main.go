@@ -194,10 +194,22 @@ func handleGenerateCommand(params []string) {
 		key, value := parts[0], parts[1]
 		switch key {
 		case "lang":
+			if value != "go" && value != "python" {
+				fmt.Printf("Invalid language: %s. Supported languages are 'go' or 'python'.\n", value)
+				return
+			}
 			language = value
 		case "ip":
+			if !isValidIP(value) {
+				fmt.Printf("Invalid IP address: %s\n", value)
+				return
+			}
 			ip = value
 		case "port":
+			if !isValidPort(value) {
+				fmt.Printf("Invalid port: %s. Port must be a number between 1 and 65535.\n", value)
+				return
+			}
 			port = value
 		case "os":
 			osType = value
@@ -210,6 +222,15 @@ func handleGenerateCommand(params []string) {
 	if err != nil {
 		fmt.Printf("Error generating client: %v\n", err)
 	}
+}
+
+func isValidIP(ip string) bool {
+	return net.ParseIP(ip) != nil
+}
+
+func isValidPort(port string) bool {
+	p, err := strconv.Atoi(port)
+	return err == nil && p > 0 && p < 65536
 }
 
 func handleUseCommand(cm *ClientManager, uuid string) {
