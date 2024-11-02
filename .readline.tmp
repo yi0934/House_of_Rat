@@ -1,0 +1,7 @@
+help 
+generate lang=go ip=1 port=12 protocol=ws
+generate lang=go ip=1.1.1.1 port=1123124322 protocol=ws
+help 
+help 
+websocket 
+use 64ae4c5b-b7cc-4196-9150-68fa9a06248d 

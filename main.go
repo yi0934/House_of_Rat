@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"net"
-	"strconv"
+	"House_of_Rat/utils"
+	"House_of_Rat/help"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
@@ -34,10 +34,6 @@ type ClientManager struct {
 type Message struct {
 	UUID    string
 	Content string
-}
-
-var availableCommands = []string{
-	"list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes", "help",
 }
 
 func NewClientManager() *ClientManager {
@@ -154,27 +150,6 @@ func generateClientTemplate(language, ip, port, osType, protocol string) error {
 	return nil
 }
 
-func printUseCommandHelp() {
-	color.Set(color.FgCyan)
-	fmt.Println("Available commands:")
-	for _, cmd := range availableCommands {
-		fmt.Printf("  %s\n", cmd)
-	}
-	color.Unset()
-}
-
-func printHelp() {
-	color.Set(color.FgCyan)
-	fmt.Println("Available commands:")
-	fmt.Println("  http            Start HTTP server")
-	fmt.Println("  websocket       Start WebSocket server")
-	fmt.Println("  list websocket  List all active WebSocket connections")
-	fmt.Println("  use <UUID>      Interact with a specific WebSocket connection (by UUID)")
-	fmt.Println("  generate        Generate a client template with options: lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
-	fmt.Println("  help            Show this help information")
-	color.Unset()
-}
-
 func handleGenerateCommand(params []string) {
 	if len(params) == 0 {
 		fmt.Println("Usage: generate lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
@@ -202,13 +177,13 @@ func handleGenerateCommand(params []string) {
 			}
 			language = value
 		case "ip":
-			if !isValidIP(value) {
+			if !utils.IsValidIP(value) {
 				fmt.Printf("Invalid IP address: %s\n", value)
 				return
 			}
 			ip = value
 		case "port":
-			if !isValidPort(value) {
+			if !utils.IsValidPort(value) {
 				fmt.Printf("Invalid port: %s. Port must be a number between 1 and 65535.\n", value)
 				return
 			}
@@ -226,14 +201,6 @@ func handleGenerateCommand(params []string) {
 	}
 }
 
-func isValidIP(ip string) bool {
-	return net.ParseIP(ip) != nil
-}
-
-func isValidPort(port string) bool {
-	p, err := strconv.Atoi(port)
-	return err == nil && p > 0 && p < 65536
-}
 
 func handleUseCommand(cm *ClientManager, uuid string) {
 	cm.mu.RLock()
@@ -283,11 +250,51 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 		case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes":
 			sendMessageToClient(cm, uuid, message)
 		case "help":
-			printUseCommandHelp()
+			help.PrintUseCommandHelp()
 		default:
 			sendMessageToClient(cm, uuid, message)
 		}
 	}
+}
+
+
+func completer(line string) []string {
+    var ipOptions = []string{"127.0.0.1", "192.168.0.1"}
+    var langOptions = []string{"python", "go"}
+    var portOptions = []string{"8080", "8081"}
+    var  protocolOptions = []string{"http", "ws"}
+    args := strings.Split(line, " ")
+
+    if len(args) < 2 {
+        return nil
+    }
+
+    if args[0] != "generate" {
+        return nil
+    }
+
+    switch args[len(args)-2] {
+    case "--lang":
+        return langOptions
+    case "--ip":
+        return ipOptions
+    case "--port":
+        return portOptions
+    case "--protocol":
+        return protocolOptions
+    }
+
+    if strings.HasPrefix(line, "generate --lang") && len(args) == 2 {
+        return langOptions
+    } else if strings.HasPrefix(line, "generate --ip") && len(args) == 2 {
+        return ipOptions
+    } else if strings.HasPrefix(line, "generate --port") && len(args) == 2 {
+        return portOptions
+    } else if strings.HasPrefix(line, "generate --protocol") && len(args) == 2 {
+        return protocolOptions
+    }
+
+    return nil
 }
 
 func main() {
@@ -324,9 +331,14 @@ func main() {
 			rl.Config.AutoComplete = readline.NewPrefixCompleter(
 				readline.PcItem("http"),
 				readline.PcItem("websocket"),
-				readline.PcItem("list", readline.PcItem("websocket")),
+				readline.PcItem("list", readline.PcItem("http") ,readline.PcItem("websocket")),
 				readline.PcItem("use", completers...),
-				readline.PcItem("generate"),
+				readline.PcItem("generate",
+					readline.PcItem("--lang", readline.PcItem("go"), readline.PcItem("python"), readline.PcItem("electron")),
+					readline.PcItem("--ip", readline.PcItem("127.0.0.1")),
+					readline.PcItem("--port", readline.PcItem("8081"),readline.PcItem("8081")),
+					readline.PcItem("--protocal", readline.PcItem("ws"),readline.PcItem("wss"),readline.PcItem("http")),
+				),
 				readline.PcItem("help"),
 			)
 		}
@@ -383,7 +395,7 @@ func main() {
 		case "generate":
 			handleGenerateCommand(command[1:])
 		case "help":
-			printHelp()
+			help.PrintHelp()
 		default:
 			color.Set(color.FgRed)
 			fmt.Println("Invalid command, please try again.")

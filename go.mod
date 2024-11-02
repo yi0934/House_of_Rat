@@ -1,4 +1,4 @@
-module myapp
+module House_of_Rat
 
 go 1.19
 

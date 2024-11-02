@@ -3,7 +3,7 @@ import json
 import os
 import subprocess
 import pyperclip
-import threading
+#import threading
 
 # Send the result back to the server
 def send_result(ws, result):
@@ -103,14 +103,16 @@ if __name__ == "__main__":
                                 on_message=on_message,
                                 on_error=on_error,
                                 on_close=on_close)
-    
     ws.on_open = on_open
-    ws_thread = threading.Thread(target=ws.run_forever)
-    ws_thread.start()
+    ws.run_forever(dispatcher=rel,reconnect=5)
+    rel.signal(2,rel.abort)
+    rel.dispatch()
+    #ws_thread = threading.Thread(target=ws.run_forever)
+    #ws_thread.start()
 
-    try:
-        while True:
-            pass  # Keep the main thread alive
-    except KeyboardInterrupt:
-        ws.close()
-        print("WebSocket client closed")
+    #try:
+    #    while True:
+    #        pass  # Keep the main thread alive
+    # except KeyboardInterrupt:
+    #    ws.close()
+    #     print("WebSocket client closed") 
