@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"net"
+	"strconv"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
