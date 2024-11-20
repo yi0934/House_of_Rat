@@ -1,4 +1,4 @@
-<h1 align="center">House_of_Rat Server</h1>
+<h1 align="center">House_of_Rat</h1>
 
 **House_of_Rat** is a Remote Administration Tool (RAT) written in Go,just for RAT research
 
