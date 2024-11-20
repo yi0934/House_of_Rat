@@ -20,8 +20,8 @@
 
 ```bash
 # Clone this repository.
-$ git clone https://github.com/yi0934/House_of_Rat-Server
-$ cd ./House_of_Rat-Server
+$ git clone https://github.com/yi0934/House_of_Rat
+$ cd ./House_of_Rat
 $ go mod tidy
 $ go mod download
 $ go build main.go
