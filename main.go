@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -91,9 +92,11 @@ func (cm *ClientManager) Start() {
 		select {
 		case client := <-cm.addHTTPClientChan:
 			cm.mu.Lock()
-			cm.HTTPClients[client.UUID] = client
+			_, exists := cm.HTTPClients[client.UUID]
 			cm.mu.Unlock()
-			fmt.Printf("New HTTP connection: %s, UUID: %s\n", client.Addr, client.UUID)
+			if !exists {
+				fmt.Printf("New HTTP connection: %s, UUID: %s\n", client.Addr, client.UUID)
+			}
 
 		case uuid := <-cm.removeHTTPClientChan:
 			cm.mu.Lock()
@@ -141,7 +144,6 @@ func (cm *ClientManager) Start() {
 
 func httpHandler(cm *ClientManager, w http.ResponseWriter, r *http.Request) {
 	uuid := r.Header.Get("UUID")
-	fmt.Printf("http Connection found\n")
 	if uuid == "" {
 		http.Error(w, "UUID is required", http.StatusBadRequest)
 		return
@@ -159,11 +161,32 @@ func httpHandler(cm *ClientManager, w http.ResponseWriter, r *http.Request) {
 	}
 	cm.addHTTPClientChan <- client
 	cm.mu.Unlock()
+	if r.Method == http.MethodPost {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			return
+		}
+		defer r.Body.Close()
+		message := string(body)
+		fmt.Printf("Received message from %s: %s\n", r.RemoteAddr, message)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Message received"))
+		return
+	}
 
 	select {
 	case response := <-client.ResponseChan:
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(response))
+		res := map[string]string{"command": response}
+		jsonResponse, err := json.Marshal(res)
+		if err != nil {
+			fmt.Printf("Failed to marshal response to JSON: %v\n", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(string(jsonResponse)))
+
 	case <-time.After(30 * time.Second):
 		http.Error(w, "No response", http.StatusGatewayTimeout)
 	}
@@ -180,7 +203,6 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 	successMessage := map[string]string{"status": "success", "message": "Connection successful", "uuid": newUUID}
 	data, _ := json.Marshal(successMessage)
 	conn.WriteMessage(websocket.TextMessage, data)
-
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
