@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,11 +78,11 @@ func NewClientManager() *ClientManager {
 	return &ClientManager{
 		HTTPClients:               make(map[string]*Client),
 		WebSocketClients:          make(map[string]*Client),
-		addHTTPClientChan:         make(chan *Client),
-		removeHTTPClientChan:      make(chan string),
-		addWebSocketClientChan:    make(chan *Client),
-		removeWebSocketClientChan: make(chan string),
-		messageChan:               make(chan Message),
+		addHTTPClientChan:         make(chan *Client, 100),
+		removeHTTPClientChan:      make(chan string, 100),
+		addWebSocketClientChan:    make(chan *Client, 100),
+		removeWebSocketClientChan: make(chan string, 100),
+		messageChan:               make(chan Message, 100),
 	}
 }
 
@@ -142,6 +141,58 @@ func (cm *ClientManager) Start() {
 	}
 }
 
+func handleFileUpload(w http.ResponseWriter, r *http.Request) {
+	err := r.ParseMultipartForm(10 << 20) // 10 MB limit
+	if err != nil {
+		http.Error(w, "Error parsing form", http.StatusInternalServerError)
+		return
+	}
+
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Error retrieving file", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	fmt.Printf("Uploaded file: %s, size: %d bytes\n", handler.Filename, handler.Size)
+
+	dst, err := os.Create(handler.Filename)
+	if err != nil {
+		http.Error(w, "Error saving file", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, file)
+	if err != nil {
+		http.Error(w, "Error writing file", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("File uploaded successfully"))
+}
+
+func handleFileDownload(w http.ResponseWriter, r *http.Request) {
+	fileName := r.URL.Query().Get("filename")
+	if fileName == "" {
+		http.Error(w, "Filename is required", http.StatusBadRequest)
+		return
+	}
+
+	file, err := os.Open(fileName)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+
+	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	io.Copy(w, file)
+}
+
 func httpHandler(cm *ClientManager, w http.ResponseWriter, r *http.Request) {
 	uuid := r.Header.Get("UUID")
 	if uuid == "" {
@@ -162,6 +213,7 @@ func httpHandler(cm *ClientManager, w http.ResponseWriter, r *http.Request) {
 	cm.addHTTPClientChan <- client
 	cm.mu.Unlock()
 	if r.Method == http.MethodPost {
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
@@ -188,8 +240,20 @@ func httpHandler(cm *ClientManager, w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(string(jsonResponse)))
 
 	case <-time.After(30 * time.Second):
-		http.Error(w, "No response", http.StatusGatewayTimeout)
+		res := map[string]string{"message": "StatusGatewayTimeout"}
+		jsonResponse, _ := json.Marshal(res)
+		http.Error(w, string(jsonResponse), http.StatusGatewayTimeout)
 	}
+}
+
+func saveFile(filename string, data []byte) error {
+	err := os.WriteFile(filename, data, 0644)
+	if err != nil {
+		fmt.Printf("Error saving file: %v\n", err)
+		return err
+	}
+	fmt.Printf("File saved successfully: %s\n", filename)
+	return nil
 }
 
 func wsHandler(cm *ClientManager, conn *websocket.Conn) {
@@ -204,41 +268,46 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 	data, _ := json.Marshal(successMessage)
 	conn.WriteMessage(websocket.TextMessage, data)
 	for {
-		_, message, err := conn.ReadMessage()
+		messageType, message, err := conn.ReadMessage()
 		if err != nil {
 			cm.removeWebSocketClientChan <- newUUID
 			break
+		}
+		if messageType == websocket.TextMessage {
+			fmt.Printf("Received message from %s: %s\n", address, message)
+		} else if messageType == websocket.BinaryMessage {
+			fmt.Printf("Received binary data from %s, saving to file...\n", address)
+			saveFile("uploaded_file.bin", message)
+			conn.WriteMessage(websocket.TextMessage, []byte("File uploaded successfully"))
 		}
 		fmt.Printf("Received message from %s: %s\n", address, message)
 	}
 }
 
-func listClients(cm *ClientManager, protocal string) []string {
+func listClients(cm *ClientManager, protocol string) []string {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-	var uuids []string
-	switch protocal {
-	case "http":
-		{
-			for _, client := range cm.HTTPClients {
-				uuids = append(uuids, client.UUID)
-			}
 
+	var clients map[string]*Client
+	if protocol == "http" {
+		clients = cm.HTTPClients
+	} else if protocol == "websocket" {
+		clients = cm.WebSocketClients
+	} else {
+		clients = nil
+	}
+
+	var uuids []string
+	if protocol == "all" {
+		for uuid := range cm.HTTPClients {
+			uuids = append(uuids, uuid)
 		}
-	case "websocket":
-		{
-			for _, client := range cm.WebSocketClients {
-				uuids = append(uuids, client.UUID)
-			}
+		for uuid := range cm.WebSocketClients {
+			uuids = append(uuids, uuid)
 		}
-	case "all":
-		{
-			for _, client := range cm.WebSocketClients {
-				uuids = append(uuids, client.UUID)
-			}
-			for _, client := range cm.HTTPClients {
-				uuids = append(uuids, client.UUID)
-			}
+	} else {
+		for uuid := range clients {
+			uuids = append(uuids, uuid)
 		}
 	}
 	return uuids
@@ -248,7 +317,7 @@ func sendMessageToClient(cm *ClientManager, uuid, message string) {
 	cm.messageChan <- Message{UUID: uuid, Content: message}
 }
 
-func generateClientTemplate(language, ip, port, osType, protocol string) error {
+func generateClientTemplate(language, ip, port, protocol string) error {
 	var fileExt string
 	switch language {
 	case "go":
@@ -282,50 +351,58 @@ func generateClientTemplate(language, ip, port, osType, protocol string) error {
 
 func handleGenerateCommand(params []string) {
 	if len(params) == 0 {
-		fmt.Println("Usage: generate lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
+		fmt.Println("Usage: generate lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss|http>")
 		return
 	}
 
 	language := "go"
 	ip := "127.0.0.1"
 	port := "8081"
-	osType := runtime.GOOS
 	protocol := "ws"
-
-	for _, param := range params {
-		parts := strings.Split(param, "=")
-		if len(parts) != 2 {
-			fmt.Printf("Invalid parameter: %s\n", param)
-			continue
-		}
-		key, value := parts[0], parts[1]
-		switch key {
-		case "lang":
-			if value != "go" && value != "python" {
-				fmt.Printf("Invalid language: %s. Supported languages are 'go' or 'python'.\n", value)
+	for i := 0; i < len(params); i++ {
+		part := params[i]
+		if strings.HasPrefix(part, "--") {
+			key := strings.TrimPrefix(part, "--")
+			if i+1 < len(params) && !strings.HasPrefix(params[i+1], "--") {
+				value := params[i+1]
+				i++
+				switch key {
+				case "lang":
+					if value != "go" && value != "python" && value != "electron" {
+						fmt.Printf("Invalid language: %s. Supported languages are 'go' or 'python' or 'electron'.\n", value)
+						return
+					}
+					language = value
+				case "ip":
+					if !IsValidIP(value) {
+						fmt.Printf("Invalid IP address: %s\n", value)
+						return
+					}
+					ip = value
+				case "port":
+					if !IsValidPort(value) {
+						fmt.Printf("Invalid port: %s. Port must be a number between 1 and 65535.\n", value)
+						return
+					}
+					port = value
+				case "protocol":
+					protocol = value
+				default:
+					fmt.Printf("Unknown parameter: --%s\n", key)
+					return
+				}
+			} else {
+				fmt.Printf("Missing value for parameter: --%s\n", key)
 				return
 			}
-			language = value
-		case "ip":
-			if !IsValidIP(value) {
-				fmt.Printf("Invalid IP address: %s\n", value)
-				return
-			}
-			ip = value
-		case "port":
-			if !IsValidPort(value) {
-				fmt.Printf("Invalid port: %s. Port must be a number between 1 and 65535.\n", value)
-				return
-			}
-			port = value
-		case "os":
-			osType = value
-		case "protocol":
-			protocol = value
 		}
 	}
+	if language == "" || ip == "" || port == "" || protocol == "" {
+		fmt.Println("Missing one or more required parameters.")
+		return
+	}
 
-	err := generateClientTemplate(language, ip, port, osType, protocol)
+	err := generateClientTemplate(language, ip, port, protocol)
 	if err != nil {
 		fmt.Printf("Error generating client: %v\n", err)
 	}
@@ -415,49 +492,9 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 	}
 }
 
-func completer(line string) []string {
-	var ipOptions = []string{"127.0.0.1", "192.168.0.1"}
-	var langOptions = []string{"python", "go"}
-	var portOptions = []string{"8080", "8081"}
-	var protocolOptions = []string{"http", "ws"}
-	args := strings.Split(line, " ")
-
-	if len(args) < 2 {
-		return nil
-	}
-
-	if args[0] != "generate" {
-		return nil
-	}
-
-	//switch args[len(args)-2] {
-	//case "--lang":
-	//   return langOptions
-	//case "--ip":
-	//    return ipOptions
-	//case "--port":
-	//    return portOptions
-	//case "--protocol":
-	//    return protocolOptions
-	//}
-
-	if strings.HasPrefix(line, "generate") && strings.HasSuffix(line, "--lang") {
-		return langOptions
-	} else if strings.HasPrefix(line, "generate") && strings.HasSuffix(line, "--ip") {
-		return ipOptions
-	} else if strings.HasPrefix(line, "generate") && strings.HasSuffix(line, "--port") {
-		return portOptions
-	} else if strings.HasPrefix(line, "generate --protocol") && strings.HasSuffix(line, "--protocol") {
-		return protocolOptions
-	}
-
-	return nil
-}
-
 func main() {
 	cm := NewClientManager()
 	go cm.Start()
-
 	config := readline.Config{
 		Prompt:       "Enter command: ",
 		HistoryFile:  ".readline.tmp",
@@ -483,10 +520,11 @@ func main() {
 				readline.PcItem("list", readline.PcItem("http"), readline.PcItem("websocket"), readline.PcItem("all")),
 				readline.PcItem("use", completers...),
 				readline.PcItem("generate",
-					readline.PcItem("--lang", readline.PcItem("go"), readline.PcItem("python"), readline.PcItem("electron")),
-					readline.PcItem("--ip", readline.PcItem("127.0.0.1")),
-					readline.PcItem("--port", readline.PcItem("8081"), readline.PcItem("8081")),
-					readline.PcItem("--protocal", readline.PcItem("ws"), readline.PcItem("wss"), readline.PcItem("http")),
+					readline.PcItem("--ip 127.0.0.1 --port 8081 --lang go --protocol ws"),
+					readline.PcItem("--ip 127.0.0.1 --port 8080 --lang go --protocol http"),
+					readline.PcItem("--ip 127.0.0.1 --port 8081 --lang python --protocol ws"),
+					readline.PcItem("--ip 127.0.0.1 --port 8080 --lang python --protocol http"),
+					readline.PcItem("--ip 127.0.0.1 --port 8081 --lang electron --protocol ws"),
 				),
 				readline.PcItem("help"),
 			)
@@ -515,6 +553,8 @@ func main() {
 			http.HandleFunc("/client", func(w http.ResponseWriter, r *http.Request) {
 				httpHandler(cm, w, r)
 			})
+			http.HandleFunc("/client/upload", handleFileUpload)
+			http.HandleFunc("/client/download", handleFileDownload)
 			go http.ListenAndServe(":8080", nil)
 			color.Set(color.FgYellow)
 			fmt.Println("HTTP server started on port 8080")
