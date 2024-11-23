@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	ip         = "{{ip}}"
-	port       = "{{port}}"
+	ip         = "{ip}"
+	port       = "{port}"
 	serverURL  = "http://" + ip + ":" + port + "/client"
 	timeout    = 30 * time.Second
 	retryDelay = 300 * time.Second
