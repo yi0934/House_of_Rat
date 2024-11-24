@@ -256,6 +256,70 @@ func saveFile(filename string, data []byte) error {
 	return nil
 }
 
+func wsuploadFileHandler(conn *websocket.Conn, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+
+	for {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				break
+			}
+			return fmt.Errorf("failed to read file content: %w", err)
+		}
+		if messageType == websocket.BinaryMessage {
+			_, err = file.Write(data)
+			if err != nil {
+				return fmt.Errorf("failed to write file: %w", err)
+			}
+		} else {
+			break
+		}
+	}
+
+	fmt.Printf("File %s uploaded successfully\n", filename)
+	return nil
+}
+
+func wsdownloadFileHandler(conn *websocket.Conn, filename string) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	buffer := make([]byte, 1024)
+	var totalBytesSent int64
+	for {
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			totalBytesSent += int64(n)
+			if writeErr := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); writeErr != nil {
+				return fmt.Errorf("failed to send file content: %w", writeErr)
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: failed to read file: %v", readErr)))
+			return readErr
+		}
+	}
+	successMessage := map[string]string{"status": "completed", "file": filename}
+	data, _ := json.Marshal(successMessage)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return fmt.Errorf("failed to send completion message: %w", err)
+	}
+
+	fmt.Printf("File %s sent successfully\n", filename)
+	return nil
+}
+
 func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 	defer conn.Close()
 
@@ -267,20 +331,75 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 	successMessage := map[string]string{"status": "success", "message": "Connection successful", "uuid": newUUID}
 	data, _ := json.Marshal(successMessage)
 	conn.WriteMessage(websocket.TextMessage, data)
+	var uploadFile *os.File
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
 			cm.removeWebSocketClientChan <- newUUID
 			break
 		}
-		if messageType == websocket.TextMessage {
-			fmt.Printf("Received message from %s: %s\n", address, message)
-		} else if messageType == websocket.BinaryMessage {
-			fmt.Printf("Received binary data from %s, saving to file...\n", address)
-			saveFile("uploaded_file.bin", message)
-			conn.WriteMessage(websocket.TextMessage, []byte("File uploaded successfully"))
+		switch messageType {
+		case websocket.TextMessage:
+			var req map[string]interface{}
+			if err := json.Unmarshal(message, &req); err != nil {
+				conn.WriteMessage(websocket.TextMessage, []byte("Invalid JSON format"))
+				continue
+			}
+
+			action, ok := req["action"].(string)
+			if !ok {
+				conn.WriteMessage(websocket.TextMessage, []byte("Missing or invalid 'action' field"))
+				continue
+			}
+			switch action {
+			case "send_result":
+				if result, ok := req["result"].(string); ok {
+					fmt.Printf("Result from UUID %s: %s\n", newUUID, result)
+				} else {
+					fmt.Println("Result key not found in message.")
+				}
+			case "upload_file":
+				if filename, ok := req["filename"].(string); ok {
+					fmt.Printf("Starting upload for file: %s\n", filename)
+					uploadFile, err = os.Create(filename)
+					if err != nil {
+						fmt.Printf("Error creating file %s: %v\n", filename, err)
+						conn.WriteMessage(websocket.TextMessage, []byte("Error creating file"))
+					}
+				} else {
+					conn.WriteMessage(websocket.TextMessage, []byte("Filename not found in message."))
+				}
+			case "download_file":
+				if filename, ok := req["filename"].(string); ok {
+					fmt.Printf("download %s ing\n", filename)
+					err = wsdownloadFileHandler(conn, filename)
+				} else {
+					fmt.Println("Filename not found in message.")
+				}
+			case "upload_completed":
+				if uploadFile != nil {
+					fmt.Println("Upload completed successfully.")
+					uploadFile.Close()
+					uploadFile = nil
+				} else {
+					fmt.Println("No file was being uploaded.")
+				}
+			default:
+				conn.WriteMessage(websocket.TextMessage, []byte("Unsupported action"))
+			}
+		case websocket.BinaryMessage:
+			if uploadFile != nil {
+				_, err = uploadFile.Write(message)
+				if err != nil {
+					fmt.Printf("Error writing to file: %v\n", err)
+					conn.WriteMessage(websocket.TextMessage, []byte("Error writing to file"))
+				}
+			} else {
+				fmt.Println("Received binary data without an active upload.")
+			}
+		default:
+			fmt.Printf("Unsupported message type: %d\n", messageType)
 		}
-		fmt.Printf("Received message from %s: %s\n", address, message)
 	}
 }
 
