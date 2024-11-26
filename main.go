@@ -348,6 +348,7 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 
 			action, ok := req["action"].(string)
 			if !ok {
+				fmt.Printf("invalid action: %s\n", action)
 				conn.WriteMessage(websocket.TextMessage, []byte("Missing or invalid 'action' field"))
 				continue
 			}
