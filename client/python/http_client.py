@@ -8,7 +8,7 @@ import pyperclip
 ip = "{ip}"
 port = "{port}"
 server_url = "http://"+ip+":"+port+"/client"
-server_url = "http://127.0.0.1:8080/client"
+#server_url = "http://127.0.0.1:8080/client"
 client_uuid = str(uuid.uuid4())
 
 print(client_uuid)
