@@ -31,14 +31,12 @@ var clientUUID = uuid.New().String()
 func main() {
 	fmt.Println("Client UUID:", clientUUID)
 
-	// Register client
 	err := registerClient()
 	if err != nil {
 		fmt.Println("Failed to register with server:", err)
 		return
 	}
 
-	// Main loop
 	retryCount := 0
 	maxRetry := 10
 	for {
@@ -49,7 +47,7 @@ func main() {
 			if retryCount > maxRetry {
 				fmt.Println("Max retries reached. Re-registering client...")
 				retryCount = 0
-				registerClient() // 强制重新注册
+				registerClient()
 			}
 			time.Sleep(retryDelay)
 		} else {
@@ -94,7 +92,7 @@ func pollServer() error {
 	if err != nil {
 		if strings.Contains(err.Error(), "context deadline exceeded") {
 			fmt.Println("Request timeout, re-registering client...")
-			return registerClient() // 再次注册
+			return registerClient()
 		}
 		return err
 	}
@@ -103,7 +101,7 @@ func pollServer() error {
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusConflict {
 			fmt.Println("UUID is not in sync, re-registering client...")
-			return registerClient() // 重新同步状态
+			return registerClient()
 		}
 		body, _ := ioutil.ReadAll(resp.Body)
 		return fmt.Errorf("server error: %d - %s", resp.StatusCode, string(body))
@@ -230,25 +228,21 @@ func downloadFile(filePath string) string {
 }
 
 func uploadFile(filePath string) string {
-	// 检查文件是否存在
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		return fmt.Sprintf("Error: The file '%s' does not exist.", filePath)
 	}
 
 	url := serverURL + "/upload"
 
-	// 打开文件
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "Error opening file: " + err.Error()
 	}
 	defer file.Close()
 
-	// 创建 multipart writer
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	// 添加文件字段
 	part, err := writer.CreateFormFile("file", filePath)
 	if err != nil {
 		return "Error creating form file: " + err.Error()
