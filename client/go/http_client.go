@@ -13,9 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
+	
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
+	"github.com/shirou/gopsutil/process"
 )
 
 const (
@@ -288,9 +289,23 @@ func executeCommand(command string) string {
 }
 
 func listProcesses() string {
-	out, err := exec.Command("ps", "-aux").Output()
+	procs, err := process.Processes()
 	if err != nil {
-		return "Error listing processes: " + err.Error()
+		log.Fatalf("Error getting processes: %v", err)
+		return "Error listing processes"
 	}
-	return string(out)
+
+	var processes []string
+	for _, proc := range procs {
+		name, err := proc.Name()
+		if err != nil {
+			continue
+		}
+		processes = append(processes, fmt.Sprintf("PID: %d, Name: %s", proc.Pid, name))
+	}
+
+	if len(processes) == 0 {
+		return "No processes found."
+	}
+	return fmt.Sprintf("Processes:\n%s", strings.Join(processes, "\n"))
 }
