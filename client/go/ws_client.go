@@ -14,6 +14,7 @@ import (
 
 	"github.com/atotto/clipboard"
 	"github.com/gorilla/websocket"
+	"github.com/shirou/gopsutil/process"
 )
 
 type CommandResponse struct {
@@ -101,9 +102,25 @@ func executeCommand(command string) (string, error) {
 }
 
 func listProcesses() (string, error) {
-	cmd := exec.Command("ps", "aux")
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+	procs, err := process.Processes()
+	if err != nil {
+		log.Fatalf("Error getting processes: %v", err)
+		return "Error listing processes", nil
+	}
+
+	var processes []string
+	for _, proc := range procs {
+		name, err := proc.Name()
+		if err != nil {
+			continue 
+		}
+		processes = append(processes, fmt.Sprintf("PID: %d, Name: %s", proc.Pid, name))
+	}
+
+	if len(processes) == 0 {
+		return "No processes found.", nil
+	}
+	return fmt.Sprintf("Processes:\n%s", strings.Join(processes, "\n")), nil
 }
 
 func receiveAndRespond(conn *websocket.Conn) {
