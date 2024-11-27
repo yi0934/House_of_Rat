@@ -4,6 +4,7 @@ import os
 import subprocess
 import pyperclip
 import threading
+import psutil
 
 
 file_write_handle = None
@@ -133,8 +134,10 @@ def execute_command(ws, command):
 
 def list_processes(ws):
     try:
-        output = subprocess.check_output("ps -aux", shell=True, text=True)
-        send_result(ws, output)
+        processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'username']):
+            processes.append(proc.info)
+        send_result(ws, str(processes))
     except Exception as e:
         send_result(ws, f"Error listing processes: {str(e)}")
 
