@@ -291,7 +291,7 @@ func executeCommand(command string) string {
 func listProcesses() string {
 	procs, err := process.Processes()
 	if err != nil {
-		log.Fatalf("Error getting processes: %v", err)
+		fmt.Sprintf("Error getting processes: %v", err)
 		return "Error listing processes"
 	}
 
