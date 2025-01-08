@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,7 +70,7 @@ func PrintHelp() {
 	fmt.Println("  websocket       Start WebSocket server")
 	fmt.Println("  list websocket  List all active WebSocket connections")
 	fmt.Println("  use <UUID>      Interact with a specific WebSocket connection (by UUID)")
-	fmt.Println("  generate        Generate a client template with options: lang=<go|python> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
+	fmt.Println("  generate        Generate a client template with options: lang=<go|python|electron> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
 	fmt.Println("  help            Show this help information")
 	color.Unset()
 }
@@ -342,14 +343,18 @@ func wsHandler(cm *ClientManager, conn *websocket.Conn) {
 		case websocket.TextMessage:
 			var req map[string]interface{}
 			if err := json.Unmarshal(message, &req); err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte("Invalid JSON format"))
+				res := map[string]string{"message": "Invalid JSON format"}
+				data, _ := json.Marshal(res)
+				conn.WriteMessage(websocket.TextMessage, data)
 				continue
 			}
 
 			action, ok := req["action"].(string)
 			if !ok {
 				fmt.Printf("invalid action: %s\n", action)
-				conn.WriteMessage(websocket.TextMessage, []byte("Missing or invalid 'action' field"))
+				res := map[string]string{"message": "Missing or invalid 'action' field"}
+				data, _ := json.Marshal(res)
+				conn.WriteMessage(websocket.TextMessage, data)
 				continue
 			}
 			switch action {
@@ -438,34 +443,92 @@ func sendMessageToClient(cm *ClientManager, uuid, message string) {
 }
 
 func generateClientTemplate(language, ip, port, protocol string) error {
-	var fileExt string
-	switch language {
-	case "go":
-		fileExt = "go"
-	case "python":
-		fileExt = "py"
-	default:
+	// Validate language
+	if language != "go" && language != "python" && language != "electron" {
 		return fmt.Errorf("unsupported language: %s", language)
 	}
 
-	templatePath := fmt.Sprintf("client/%s/%s_client.%s", language, protocol, fileExt)
+	// Define source and target paths
+	sourceDir := fmt.Sprintf("client/%s/%s_client", language, protocol)
+	targetDir := fmt.Sprintf("output_client/%s/%s_client_%s", language, protocol, port)
 
-	content, err := os.ReadFile(templatePath)
+	// Remove the target directory if it exists
+	err := os.RemoveAll(targetDir)
 	if err != nil {
-		return fmt.Errorf("failed to read template file: %v", err)
+		return fmt.Errorf("failed to remove existing target directory: %w", err)
+	}
+
+	// Recreate the target directory
+	err = os.MkdirAll(targetDir, os.ModePerm)
+	if err != nil {
+		return fmt.Errorf("failed to create target directory: %w", err)
+	}
+
+	// Copy files and apply template replacements
+	err = filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Determine the relative path to replicate directory structure
+		relPath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+
+		targetPath := filepath.Join(targetDir, relPath)
+
+		// Handle directories
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, os.ModePerm)
+		}
+
+		// Handle files
+		return processFile(language, protocol, path, targetPath, ip, port)
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to process files: %w", err)
+	}
+
+	fmt.Printf("Client template generated successfully at %s\n", targetDir)
+	return nil
+}
+
+// processFile processes a file by copying it and applying template replacements based on language.
+func processFile(language, protocol, srcPath, dstPath, ip, port string) error {
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to read source file: %w", err)
 	}
 
 	template := string(content)
-	template = strings.ReplaceAll(template, "{ip}", ip)
-	template = strings.ReplaceAll(template, "{port}", port)
 
-	filename := fmt.Sprintf("client_%s.%s", language, fileExt)
-	err = os.WriteFile(filename, []byte(template), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write client file: %v", err)
+	// Apply replacements based on language
+	switch language {
+	case "go", "python":
+		// Replace placeholders in the main template file (e.g., .go or .py file)
+		fileExt := "go"
+		if language == "python" {
+			fileExt = "py"
+		}
+		if strings.HasSuffix(srcPath, fmt.Sprintf("%s_client.%s", protocol, fileExt)) {
+			template = strings.ReplaceAll(template, "{ip}", ip)
+			template = strings.ReplaceAll(template, "{port}", port)
+		}
+	case "electron":
+		// Replace placeholders in the main.js file
+		if strings.HasSuffix(srcPath, "main.js") {
+			template = strings.ReplaceAll(template, "{ip}", ip)
+			template = strings.ReplaceAll(template, "{port}", port)
+		}
 	}
 
-	fmt.Printf("Client template generated: %s\n", filename)
+	// Write the processed content to the target file
+	err = os.WriteFile(dstPath, []byte(template), os.ModePerm)
+	if err != nil {
+		return fmt.Errorf("failed to write to destination file: %w", err)
+	}
 	return nil
 }
 
