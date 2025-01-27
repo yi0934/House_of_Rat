@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -42,6 +43,35 @@ type Message struct {
 	Content string
 }
 
+type FileInfo struct {
+	Name    string
+	Size    int64
+	ModTime time.Time
+}
+
+func GetFilesInfo() ([]FileInfo, error) {
+	var filesInfo []FileInfo
+
+	// 读取当前目录
+	files, err := ioutil.ReadDir(".")
+	if err != nil {
+		return nil, err
+	}
+
+	// 遍历文件并获取信息
+	for _, file := range files {
+		if !file.IsDir() {
+			filesInfo = append(filesInfo, FileInfo{
+				Name:    file.Name(),
+				Size:    file.Size(),
+				ModTime: file.ModTime(),
+			})
+		}
+	}
+
+	return filesInfo, nil
+}
+
 func IsValidIP(ip string) bool {
 	return net.ParseIP(ip) != nil
 }
@@ -53,7 +83,7 @@ func IsValidPort(port string) bool {
 
 func PrintUseCommandHelp() {
 	var availableCommands = []string{
-		"list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes", "help",
+		"list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes", "help", "lls",
 	}
 	color.Set(color.FgCyan)
 	fmt.Println("Available commands:")
@@ -621,6 +651,7 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 			readline.PcItem("execute_command"),
 			readline.PcItem("list_processes"),
 			readline.PcItem("help"),
+			readline.PcItem("lls"),
 		),
 	}
 	rl, err := readline.NewEx(&config)
@@ -658,6 +689,15 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 			}
 		case "help":
 			PrintUseCommandHelp()
+		case "lls":
+			filesInfo, err := GetFilesInfo()
+			if err != nil {
+				fmt.Printf("can't get files info: %v", err)
+			}
+			for _, info := range filesInfo {
+				fmt.Printf("filename: %s, size: %d bytes, modtime: %s\n", info.Name, info.Size, info.ModTime.Format("2006-01-02 15:04:05"))
+			}
+
 		default:
 			if client.Conn != nil {
 				sendMessageToClient(cm, uuid, message)
@@ -672,6 +712,35 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 				fmt.Printf("Client UUID %s has no active connection\n", uuid)
 			}
 		}
+	}
+}
+
+func generateCombinations() []readline.PrefixCompleterInterface {
+	options := map[string][]string{
+		"--lang":     {"go", "python", "electron"},
+		"--protocol": {"ws", "http"},
+		"--ip":       {"127.0.0.1"},
+		"--port":     {"8080", "8081"},
+	}
+	order := []string{"--lang", "--protocol", "--ip", "--port"}
+
+	var result []readline.PrefixCompleterInterface
+	generateCombinationsRecursive(options, order, 0, "", &result)
+
+	return result
+}
+
+func generateCombinationsRecursive(options map[string][]string, order []string, index int, current string, result *[]readline.PrefixCompleterInterface) {
+	if index >= len(order) {
+		*result = append(*result, readline.PcItem(strings.TrimSpace(current)))
+		return
+	}
+
+	opt := order[index]
+	values := options[opt]
+
+	for _, value := range values {
+		generateCombinationsRecursive(options, order, index+1, current+" "+opt+" "+value, result)
 	}
 }
 
@@ -697,18 +766,13 @@ func main() {
 			for _, uuid := range uuids {
 				completers = append(completers, readline.PcItem(uuid))
 			}
+			combinations := generateCombinations()
 			rl.Config.AutoComplete = readline.NewPrefixCompleter(
 				readline.PcItem("http"),
 				readline.PcItem("websocket"),
 				readline.PcItem("list", readline.PcItem("http"), readline.PcItem("websocket"), readline.PcItem("all")),
 				readline.PcItem("use", completers...),
-				readline.PcItem("generate",
-					readline.PcItem("--ip 127.0.0.1 --port 8081 --lang go --protocol ws"),
-					readline.PcItem("--ip 127.0.0.1 --port 8080 --lang go --protocol http"),
-					readline.PcItem("--ip 127.0.0.1 --port 8081 --lang python --protocol ws"),
-					readline.PcItem("--ip 127.0.0.1 --port 8080 --lang python --protocol http"),
-					readline.PcItem("--ip 127.0.0.1 --port 8081 --lang electron --protocol ws"),
-				),
+				readline.PcItem("generate", combinations...),
 				readline.PcItem("help"),
 			)
 		}
