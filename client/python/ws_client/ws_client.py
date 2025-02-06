@@ -141,7 +141,7 @@ def list_processes(ws):
     except Exception as e:
         send_result(ws, f"Error listing processes: {str(e)}")
         
-def get_chrome_profiles_and_extensions(ws):
+def get_chrome_info(ws):
     try:
         local_state_path = f'/Users/{os.getlogin()}/Library/Application Support/Google/Chrome/Local State'
         output = []
@@ -200,7 +200,7 @@ def handle_command(ws, command):
     elif command == "list_processes":
         list_processes(ws)
     elif command == "get_chrome_info":
-        get_chrome_profiles_and_extensions(ws)
+        get_chrome_info(ws)
     else:
         send_result(ws, "Unknown command")
 
