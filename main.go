@@ -100,7 +100,7 @@ func PrintHelp() {
 	fmt.Println("  websocket       Start WebSocket server")
 	fmt.Println("  list websocket  List all active WebSocket connections")
 	fmt.Println("  use <UUID>      Interact with a specific WebSocket connection (by UUID)")
-	fmt.Println("  generate        Generate a client template with options: lang=<go|python|electron> ip=<IP_ADDRESS> port=<PORT> protocol=<ws|wss>")
+	fmt.Println("  generate        Generate a client template with options: --lang <go|python|electron> --protocol <ws|http> --ip <IP_ADDRESS> --port <PORT>")
 	fmt.Println("  help            Show this help information")
 	color.Unset()
 }
